@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { Search, X } from 'lucide-react'
 import { useDashboardStore } from '@/stores/dashboard'
-import { useWebSocket } from '@/hooks/useWebSocket'
+import { useWebSocketListener } from '@/hooks/useWebSocket'
 import PRCard from '@/components/PRCard'
 
 export default function Dashboard() {
@@ -15,11 +15,16 @@ export default function Dashboard() {
   const handleRealtimeEvent = useDashboardStore((s) => s.handleRealtimeEvent)
   const clearFlashAdded = useDashboardStore((s) => s.clearFlashAdded)
   const clearFlashUpdated = useDashboardStore((s) => s.clearFlashUpdated)
-  const { lastEvent } = useWebSocket()
 
   const [selectedRepos, setSelectedRepos] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
-  const prevEventRef = useRef<number>(0)
+
+  useWebSocketListener(
+    ['pull_request_opened', 'pull_request_updated', 'pull_request_closed', 'workflow_run_started', 'check_suite_completed', 'pipeline_run_updated', 'pipeline_run_completed'],
+    (event) => {
+      handleRealtimeEvent(event)
+    }
+  )
 
   useEffect(() => {
     fetchRepos()
@@ -32,13 +37,6 @@ export default function Dashboard() {
       repos.forEach((r) => fetchPullRequests(r.id))
     }
   }, [repos, selectedRepos.size, fetchPullRequests])
-
-  useEffect(() => {
-    if (lastEvent && lastEvent.timestamp !== prevEventRef.current) {
-      prevEventRef.current = lastEvent.timestamp
-      handleRealtimeEvent(lastEvent)
-    }
-  }, [lastEvent, handleRealtimeEvent])
 
   useEffect(() => {
     flashAddedPRs.forEach((prId) => {

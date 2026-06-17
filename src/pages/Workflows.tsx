@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Play, X, CheckCircle2, AlertCircle, Loader2, ExternalLink } from 'lucide-react'
+import { Play, X, CheckCircle2, AlertCircle, Loader2, ExternalLink, Zap } from 'lucide-react'
 import { useWorkflowsStore } from '@/stores/workflows'
 import { useDashboardStore } from '@/stores/dashboard'
-import { useWebSocket } from '@/hooks/useWebSocket'
+import { useWebSocketListener } from '@/hooks/useWebSocket'
 import StatusBadge from '@/components/StatusBadge'
 
 export default function Workflows() {
@@ -18,14 +18,20 @@ export default function Workflows() {
   const fetchWorkflows = useWorkflowsStore((s) => s.fetchWorkflows)
   const dispatchWorkflow = useWorkflowsStore((s) => s.dispatchWorkflow)
   const handleRealtimeEvent = useWorkflowsStore((s) => s.handleRealtimeEvent)
-  const { lastEvent } = useWebSocket()
-  const prevEventRef = useRef<number>(0)
 
   const [selectedRepoId, setSelectedRepoId] = useState<string>('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogWorkflow, setDialogWorkflow] = useState<string>('')
   const [dialogRef, setDialogRef] = useState('main')
   const [dialogInputs, setDialogInputs] = useState<Record<string, string>>({})
+  const [demoMode, setDemoMode] = useState<boolean>(false)
+
+  useWebSocketListener(
+    ['pipeline_run_created', 'pipeline_run_updated', 'pipeline_run_completed', 'workflow_status_updated'],
+    (event) => {
+      handleRealtimeEvent(event)
+    }
+  )
 
   useEffect(() => {
     if (repos.length === 0) fetchRepos()
@@ -41,22 +47,23 @@ export default function Workflows() {
     if (selectedRepoId) fetchWorkflows(selectedRepoId)
   }, [selectedRepoId, fetchWorkflows])
 
-  useEffect(() => {
-    if (lastEvent && lastEvent.timestamp !== prevEventRef.current) {
-      prevEventRef.current = lastEvent.timestamp
-      handleRealtimeEvent(lastEvent)
-    }
-  }, [lastEvent, handleRealtimeEvent])
-
   const openDialog = (workflowId: string) => {
     setDialogWorkflow(workflowId)
     setDialogRef('main')
     setDialogInputs({})
+    setDemoMode(false)
     setDialogOpen(true)
   }
 
   const handleDispatch = async () => {
-    await dispatchWorkflow(selectedRepoId, dialogWorkflow, dialogRef, dialogInputs)
+    await dispatchWorkflow(selectedRepoId, dialogWorkflow, dialogRef, dialogInputs, demoMode)
+    if (!lastDispatchResult || lastDispatchResult.success) {
+      setDialogOpen(false)
+    }
+  }
+
+  const handleRetryAsDemo = async () => {
+    await dispatchWorkflow(selectedRepoId, dialogWorkflow, dialogRef, dialogInputs, true)
     setDialogOpen(false)
   }
 
@@ -195,6 +202,49 @@ export default function Workflows() {
                 />
               </div>
 
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="demoMode"
+                  checked={demoMode}
+                  onChange={(e) => setDemoMode(e.target.checked)}
+                  className="w-4 h-4 rounded border-[var(--border)] bg-[var(--bg-primary)] text-[var(--accent)] focus:ring-[var(--accent)]"
+                />
+                <label htmlFor="demoMode" className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                  <Zap size={14} />
+                  Demo Mode (local simulation, no GitHub API call)
+                </label>
+              </div>
+
+              {lastDispatchResult && !lastDispatchResult.success && dialogOpen && (
+                <div className="bg-[rgba(239,68,68,0.15)] border border-[rgba(239,68,68,0.3)] rounded-lg p-3">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={16} className="text-[var(--error)] mt-0.5 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-[var(--error)]">{lastDispatchResult.message}</p>
+                      {lastDispatchResult.error_detail && (
+                        <p className="text-xs text-[var(--text-secondary)] mt-1">{lastDispatchResult.error_detail}</p>
+                      )}
+                      {lastDispatchResult.error_code && (
+                        <p className="text-xs text-[var(--text-secondary)] mt-1 font-mono">
+                          Code: {lastDispatchResult.error_code}
+                        </p>
+                      )}
+                      {lastDispatchResult.error_code === 'NO_GITHUB_TOKEN' && (
+                        <button
+                          onClick={handleRetryAsDemo}
+                          disabled={dispatching}
+                          className="mt-2 w-full px-3 py-1.5 rounded-md bg-[var(--accent)]/20 text-[var(--accent)] text-xs font-medium hover:bg-[var(--accent)]/30 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+                        >
+                          <Zap size={12} />
+                          Retry in Demo Mode
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => setDialogOpen(false)}
@@ -208,7 +258,7 @@ export default function Workflows() {
                   className="flex-1 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
                 >
                   {dispatching && <Loader2 size={14} className="animate-spin" />}
-                  {dispatching ? 'Dispatching...' : 'Trigger'}
+                  {dispatching ? 'Dispatching...' : demoMode ? 'Trigger (Demo)' : 'Trigger'}
                 </button>
               </div>
             </div>

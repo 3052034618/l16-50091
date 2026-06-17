@@ -201,7 +201,7 @@ function advanceJobSteps(jobId: number, progress: number, success: boolean = tru
 router.post('/:repoId/:workflowId/dispatch', async (req: Request, res: Response) => {
   const repoId = parseInt(req.params.repoId)
   const workflowId = parseInt(req.params.workflowId)
-  const { ref, inputs } = req.body
+  const { ref, inputs, force_demo } = req.body
 
   const workflow = db.workflows.find((w) => w.id === workflowId && w.repo_id === repoId)
   const repo = db.repos.find((r) => r.id === repoId)
@@ -215,14 +215,27 @@ router.post('/:repoId/:workflowId/dispatch', async (req: Request, res: Response)
     return
   }
 
-  let githubResult: { success: boolean; error_code?: string; error_detail?: string } = { success: false, error_code: 'NO_GITHUB_TOKEN', error_detail: 'Demo mode' }
-  if (GITHUB_TOKEN && repo) {
+  const useDemoMode = !GITHUB_TOKEN || force_demo === true
+
+  if (!GITHUB_TOKEN && force_demo !== true) {
+    res.status(400).json({
+      error: 'No GitHub token configured',
+      error_code: 'NO_GITHUB_TOKEN',
+      error_detail: 'GITHUB_TOKEN environment variable is not set. Either configure a token or enable "Demo Mode" to simulate the workflow run.',
+      mode: 'requires_config',
+    })
+    return
+  }
+
+  let githubResult: { success: boolean; error_code?: string; error_detail?: string } = { success: false }
+  if (GITHUB_TOKEN && repo && force_demo !== true) {
     githubResult = await triggerWorkflowViaGitHub(repo.full_name, workflow.github_id || workflow.path, ref, inputs)
     if (!githubResult.success) {
       res.status(400).json({
         error: githubResult.error_detail || 'Failed to trigger workflow',
         error_code: githubResult.error_code,
         error_detail: githubResult.error_detail,
+        mode: 'github',
       })
       return
     }
@@ -279,7 +292,7 @@ router.post('/:repoId/:workflowId/dispatch', async (req: Request, res: Response)
   }
   broadcastEvent('workflow_status_updated', workflowUpdate)
 
-  if (!GITHUB_TOKEN) {
+  if (useDemoMode) {
     setTimeout(() => {
       const run = db.pipelineRuns.find((r) => r.id === newRun.id)
       const deploy = db.deployRecords.find((d) => d.id === newDeploy.id)
@@ -361,8 +374,9 @@ router.post('/:repoId/:workflowId/dispatch', async (req: Request, res: Response)
     workflow: workflow.name,
     environment,
     status: 'queued',
-    mode: GITHUB_TOKEN ? 'github' : 'demo',
-    github_triggered: githubResult.success,
+    mode: useDemoMode ? 'demo' : 'github',
+    github_triggered: !useDemoMode && githubResult.success,
+    message: useDemoMode ? 'Running in Demo Mode (local simulation)' : 'Workflow triggered on GitHub',
   })
 })
 

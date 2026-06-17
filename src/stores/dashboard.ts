@@ -28,6 +28,9 @@ export interface PullRequest {
   updated_at: string
   repo_id: string
   html_url: string
+  head_branch: string
+  base_branch: string
+  status: 'open' | 'closed' | 'merged'
 }
 
 interface DashboardState {
@@ -73,6 +76,9 @@ function mapPayloadToPR(payload: any): PullRequest {
     updated_at: payload.updated_at ?? new Date().toISOString(),
     repo_id: repoId,
     html_url: payload.html_url ?? '',
+    head_branch: payload.head_branch ?? payload.head?.ref ?? '',
+    base_branch: payload.base_branch ?? payload.base?.ref ?? '',
+    status: (payload.status as 'open' | 'closed' | 'merged') ?? (isMerged ? 'merged' : 'open'),
   }
 }
 
@@ -144,47 +150,84 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       'pr_updated',
     ]
 
-    if (!prEvents.includes(type)) return
+    const pipelineEvents = ['pipeline_run_updated', 'pipeline_run_completed']
 
-    const pr = mapPayloadToPR(data)
-    const repoId = pr.repo_id
-    if (!repoId || !pr.id) return
+    if (prEvents.includes(type)) {
+      const pr = mapPayloadToPR(data)
+      const repoId = pr.repo_id
+      if (!repoId || !pr.id) return
 
-    const existing = get().pullRequests[repoId] || []
-    const idx = existing.findIndex((p) => p.id === pr.id)
-    const isNew = idx === -1
+      const existing = get().pullRequests[repoId] || []
+      const idx = existing.findIndex((p) => p.id === pr.id)
+      const isNew = idx === -1
 
-    let updatedPRs: PullRequest[]
+      let updatedPRs: PullRequest[]
 
-    if (type === 'pull_request_opened' || type === 'pr_created') {
-      updatedPRs = sortPRsByUpdatedDesc([pr, ...existing])
-    } else if (isNew) {
-      updatedPRs = sortPRsByUpdatedDesc([pr, ...existing])
-    } else {
-      const merged = { ...existing[idx], ...pr }
-      updatedPRs = sortPRsByUpdatedDesc([
-        ...existing.slice(0, idx),
-        merged,
-        ...existing.slice(idx + 1),
-      ])
-    }
-
-    set((state) => {
-      const nextFlashAdded = new Set(state.flashAddedPRs)
-      const nextFlashUpdated = new Set(state.flashUpdatedPRs)
-
-      if (type === 'pull_request_opened' || type === 'pr_created' || isNew) {
-        nextFlashAdded.add(pr.id)
+      if (type === 'pull_request_opened' || type === 'pr_created') {
+        updatedPRs = sortPRsByUpdatedDesc([pr, ...existing])
+      } else if (isNew) {
+        updatedPRs = sortPRsByUpdatedDesc([pr, ...existing])
       } else {
-        nextFlashUpdated.add(pr.id)
+        const merged = { ...existing[idx], ...pr }
+        updatedPRs = sortPRsByUpdatedDesc([
+          ...existing.slice(0, idx),
+          merged,
+          ...existing.slice(idx + 1),
+        ])
       }
 
-      return {
-        pullRequests: { ...state.pullRequests, [repoId]: updatedPRs },
-        flashAddedPRs: nextFlashAdded,
-        flashUpdatedPRs: nextFlashUpdated,
+      set((state) => {
+        const nextFlashAdded = new Set(state.flashAddedPRs)
+        const nextFlashUpdated = new Set(state.flashUpdatedPRs)
+
+        if (type === 'pull_request_opened' || type === 'pr_created' || isNew) {
+          nextFlashAdded.add(pr.id)
+        } else {
+          nextFlashUpdated.add(pr.id)
+        }
+
+        return {
+          pullRequests: { ...state.pullRequests, [repoId]: updatedPRs },
+          flashAddedPRs: nextFlashAdded,
+          flashUpdatedPRs: nextFlashUpdated,
+        }
+      })
+    } else if (pipelineEvents.includes(type)) {
+      const runRepoId = String(data.repo_id || '')
+      const runBranch = data.branch
+      const runConclusion = data.conclusion
+      const runStatus = data.status
+      if (!runRepoId || !runBranch) return
+
+      let newCiStatus: PullRequest['ci_status'] = 'pending'
+      if (runStatus === 'completed') {
+        newCiStatus = runConclusion === 'success' ? 'success' : 'failure'
+      } else if (runStatus === 'in_progress') {
+        newCiStatus = 'running'
+      } else if (runStatus === 'queued') {
+        newCiStatus = 'pending'
       }
-    })
+
+      const existing = get().pullRequests[runRepoId] || []
+      const prIdx = existing.findIndex((p) => p.head_branch === runBranch && p.status === 'open')
+      if (prIdx === -1) return
+
+      const updatedPR = { ...existing[prIdx], ci_status: newCiStatus, updated_at: new Date().toISOString() }
+      const updatedPRs = sortPRsByUpdatedDesc([
+        ...existing.slice(0, prIdx),
+        updatedPR,
+        ...existing.slice(prIdx + 1),
+      ])
+
+      set((state) => {
+        const nextFlashUpdated = new Set(state.flashUpdatedPRs)
+        nextFlashUpdated.add(updatedPR.id)
+        return {
+          pullRequests: { ...state.pullRequests, [runRepoId]: updatedPRs },
+          flashUpdatedPRs: nextFlashUpdated,
+        }
+      })
+    }
   },
   clearFlashAdded: (prId: string) => {
     set((state) => {

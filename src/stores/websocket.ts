@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+type EventCallback = (event: { type: string; payload: any; timestamp: number }) => void
+
 interface WSEvent {
   type: string
   payload: unknown
@@ -10,14 +12,17 @@ interface WebSocketState {
   connected: boolean
   lastEvent: WSEvent | null
   ws: WebSocket | null
+  subscribers: Set<EventCallback>
   connect: () => void
   disconnect: () => void
+  subscribe: (callback: EventCallback) => () => void
 }
 
 export const useWebSocketStore = create<WebSocketState>((set, get) => ({
   connected: false,
   lastEvent: null,
   ws: null,
+  subscribers: new Set<EventCallback>(),
   connect: () => {
     const existing = get().ws
     if (existing && existing.readyState === WebSocket.OPEN) return
@@ -33,9 +38,17 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
     ws.onmessage = (event) => {
       try {
         const parsed = JSON.parse(event.data)
-        set({ lastEvent: { type: parsed.type, payload: parsed.data, timestamp: Date.now() } })
+        const eventObj = { type: parsed.type, payload: parsed.payload, timestamp: Date.now() }
+        set({ lastEvent: eventObj })
+        for (const cb of get().subscribers) {
+          cb(eventObj)
+        }
       } catch {
-        set({ lastEvent: { type: 'raw', payload: event.data, timestamp: Date.now() } })
+        const eventObj = { type: 'raw', payload: event.data, timestamp: Date.now() }
+        set({ lastEvent: eventObj })
+        for (const cb of get().subscribers) {
+          cb(eventObj)
+        }
       }
     }
 
@@ -46,6 +59,12 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
     if (ws) {
       ws.close()
       set({ ws: null, connected: false })
+    }
+  },
+  subscribe: (callback: EventCallback) => {
+    get().subscribers.add(callback)
+    return () => {
+      get().subscribers.delete(callback)
     }
   },
 }))

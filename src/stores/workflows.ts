@@ -12,6 +12,9 @@ export interface Workflow {
 interface DispatchResult {
   success: boolean
   message: string
+  error_code?: string
+  error_detail?: string
+  mode?: string
   run_id?: string
   deploy_id?: string
 }
@@ -23,7 +26,7 @@ interface WorkflowsState {
   currentRunId: string | null
   currentWorkflowId: string | null
   fetchWorkflows: (repoId: string) => Promise<void>
-  dispatchWorkflow: (repoId: string, workflowId: string, ref: string, inputs?: Record<string, string>) => Promise<void>
+  dispatchWorkflow: (repoId: string, workflowId: string, ref: string, inputs?: Record<string, string>, forceDemo?: boolean) => Promise<void>
   handleRealtimeEvent: (event: { type: string; payload: any }) => void
   clearCurrentRun: () => void
 }
@@ -62,24 +65,33 @@ export const useWorkflowsStore = create<WorkflowsState>((set, get) => ({
       // silently fail
     }
   },
-  dispatchWorkflow: async (repoId: string, workflowId: string, ref: string, inputs?: Record<string, string>) => {
+  dispatchWorkflow: async (repoId: string, workflowId: string, ref: string, inputs?: Record<string, string>, forceDemo?: boolean) => {
     set({ dispatching: true, lastDispatchResult: null })
     try {
       const res = await fetch(`/api/workflows/${repoId}/${workflowId}/dispatch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref, inputs }),
+        body: JSON.stringify({ ref, inputs, force_demo: forceDemo }),
       })
-      if (!res.ok) {
-        let errorData: any
-        try {
-          errorData = await res.json()
-        } catch {
-          errorData = { error: 'Dispatch failed' }
-        }
-        throw new Error(errorData.error || 'Dispatch failed')
+      let data: any
+      try {
+        data = await res.json()
+      } catch {
+        data = { error: 'Dispatch failed' }
       }
-      const data = await res.json()
+      if (!res.ok) {
+        set({
+          dispatching: false,
+          lastDispatchResult: {
+            success: false,
+            message: data.error || 'Dispatch failed',
+            error_code: data.error_code,
+            error_detail: data.error_detail,
+            mode: data.mode,
+          },
+        })
+        return
+      }
       set((state) => {
         const updatedWorkflows = state.workflows.map((wf) => {
           if (wf.id === workflowId) {
@@ -95,9 +107,10 @@ export const useWorkflowsStore = create<WorkflowsState>((set, get) => ({
           dispatching: false,
           lastDispatchResult: {
             success: true,
-            message: 'Workflow dispatched successfully',
+            message: data.message || (data.mode === 'demo' ? 'Workflow dispatched in Demo Mode' : 'Workflow dispatched successfully'),
             run_id: String(data.run_id),
             deploy_id: String(data.deploy_id),
+            mode: data.mode,
           },
           currentRunId: String(data.run_id),
           currentWorkflowId: workflowId,
