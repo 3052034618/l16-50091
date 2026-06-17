@@ -119,15 +119,18 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         id: String(pr.id),
         number: pr.number,
         title: pr.title,
-        author: { login: pr.author_login, avatar_url: pr.author_avatar_url || '' },
+        author: { login: pr.author_login || pr.author?.login || '', avatar_url: pr.author_avatar_url || pr.author?.avatar_url || '' },
         ci_status: pr.ci_status || 'pending',
         reviewers: pr.reviewers || [],
         mergeable: null,
-        merged: pr.status === 'merged',
+        merged: pr.status === 'merged' || pr.merged === true,
         created_at: pr.created_at,
         updated_at: pr.updated_at,
-        repo_id: String(pr.repo_id),
-        html_url: '',
+        repo_id: String(pr.repo_id || repoId),
+        html_url: pr.html_url || '',
+        head_branch: pr.head_branch || pr.head_ref || '',
+        base_branch: pr.base_branch || pr.base_ref || '',
+        status: (pr.status as 'open' | 'closed' | 'merged') || (pr.merged ? 'merged' : 'open'),
       }))
       set((state) => ({
         pullRequests: { ...state.pullRequests, [repoId]: sortPRsByUpdatedDesc(prs) },
@@ -150,7 +153,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       'pr_updated',
     ]
 
-    const pipelineEvents = ['pipeline_run_updated', 'pipeline_run_completed']
+    const pipelineEvents = ['pipeline_run_created', 'pipeline_run_updated', 'pipeline_run_completed']
 
     if (prEvents.includes(type)) {
       const pr = mapPayloadToPR(data)
@@ -209,7 +212,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }
 
       const existing = get().pullRequests[runRepoId] || []
-      const prIdx = existing.findIndex((p) => p.head_branch === runBranch && p.status === 'open')
+      let prIdx = existing.findIndex((p) => p.head_branch === runBranch && p.status === 'open')
+      if (prIdx === -1) {
+        prIdx = existing.findIndex((p) => (!p.head_branch || p.head_branch === '') && p.status === 'open')
+      }
       if (prIdx === -1) return
 
       const updatedPR = { ...existing[prIdx], ci_status: newCiStatus, updated_at: new Date().toISOString() }

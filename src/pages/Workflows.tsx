@@ -56,15 +56,17 @@ export default function Workflows() {
   }
 
   const handleDispatch = async () => {
-    await dispatchWorkflow(selectedRepoId, dialogWorkflow, dialogRef, dialogInputs, demoMode)
-    if (!lastDispatchResult || lastDispatchResult.success) {
+    const result = await dispatchWorkflow(selectedRepoId, dialogWorkflow, dialogRef, dialogInputs, demoMode)
+    if (result.success) {
       setDialogOpen(false)
     }
   }
 
   const handleRetryAsDemo = async () => {
-    await dispatchWorkflow(selectedRepoId, dialogWorkflow, dialogRef, dialogInputs, true)
-    setDialogOpen(false)
+    const result = await dispatchWorkflow(selectedRepoId, dialogWorkflow, dialogRef, dialogInputs, true)
+    if (result.success) {
+      setDialogOpen(false)
+    }
   }
 
   return (

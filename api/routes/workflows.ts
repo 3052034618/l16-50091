@@ -5,7 +5,9 @@ import { Octokit } from 'octokit'
 
 const router = Router()
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN
+function getGitHubToken(): string | undefined {
+  return process.env.GITHUB_TOKEN
+}
 
 async function triggerWorkflowViaGitHub(
   repoFullName: string,
@@ -13,12 +15,13 @@ async function triggerWorkflowViaGitHub(
   ref: string,
   inputs?: Record<string, string>
 ): Promise<{ success: boolean; error_code?: string; error_detail?: string; run_id?: number }> {
-  if (!GITHUB_TOKEN) {
+  const token = getGitHubToken()
+  if (!token) {
     return { success: false, error_code: 'NO_GITHUB_TOKEN', error_detail: 'No GitHub token configured. Set GITHUB_TOKEN environment variable to enable real GitHub Actions triggers.' }
   }
 
   try {
-    const octokit = new Octokit({ auth: GITHUB_TOKEN })
+    const octokit = new Octokit({ auth: token })
     const [owner, repo] = repoFullName.split('/')
 
     if (!owner || !repo) {
@@ -215,9 +218,10 @@ router.post('/:repoId/:workflowId/dispatch', async (req: Request, res: Response)
     return
   }
 
-  const useDemoMode = !GITHUB_TOKEN || force_demo === true
+  const hasToken = !!getGitHubToken()
+  const useDemoMode = !hasToken || force_demo === true
 
-  if (!GITHUB_TOKEN && force_demo !== true) {
+  if (!hasToken && force_demo !== true) {
     res.status(400).json({
       error: 'No GitHub token configured',
       error_code: 'NO_GITHUB_TOKEN',
@@ -228,7 +232,7 @@ router.post('/:repoId/:workflowId/dispatch', async (req: Request, res: Response)
   }
 
   let githubResult: { success: boolean; error_code?: string; error_detail?: string } = { success: false }
-  if (GITHUB_TOKEN && repo && force_demo !== true) {
+  if (hasToken && repo && force_demo !== true) {
     githubResult = await triggerWorkflowViaGitHub(repo.full_name, workflow.github_id || workflow.path, ref, inputs)
     if (!githubResult.success) {
       res.status(400).json({

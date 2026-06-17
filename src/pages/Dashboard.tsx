@@ -20,7 +20,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState('')
 
   useWebSocketListener(
-    ['pull_request_opened', 'pull_request_updated', 'pull_request_closed', 'workflow_run_started', 'check_suite_completed', 'pipeline_run_updated', 'pipeline_run_completed'],
+    ['pull_request_opened', 'pull_request_updated', 'pull_request_closed', 'workflow_run_started', 'check_suite_completed', 'pipeline_run_created', 'pipeline_run_updated', 'pipeline_run_completed'],
     (event) => {
       handleRealtimeEvent(event)
     }

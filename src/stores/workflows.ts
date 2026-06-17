@@ -26,7 +26,7 @@ interface WorkflowsState {
   currentRunId: string | null
   currentWorkflowId: string | null
   fetchWorkflows: (repoId: string) => Promise<void>
-  dispatchWorkflow: (repoId: string, workflowId: string, ref: string, inputs?: Record<string, string>, forceDemo?: boolean) => Promise<void>
+  dispatchWorkflow: (repoId: string, workflowId: string, ref: string, inputs?: Record<string, string>, forceDemo?: boolean) => Promise<DispatchResult>
   handleRealtimeEvent: (event: { type: string; payload: any }) => void
   clearCurrentRun: () => void
 }
@@ -80,17 +80,25 @@ export const useWorkflowsStore = create<WorkflowsState>((set, get) => ({
         data = { error: 'Dispatch failed' }
       }
       if (!res.ok) {
+        const result: DispatchResult = {
+          success: false,
+          message: data.error || 'Dispatch failed',
+          error_code: data.error_code,
+          error_detail: data.error_detail,
+          mode: data.mode,
+        }
         set({
           dispatching: false,
-          lastDispatchResult: {
-            success: false,
-            message: data.error || 'Dispatch failed',
-            error_code: data.error_code,
-            error_detail: data.error_detail,
-            mode: data.mode,
-          },
+          lastDispatchResult: result,
         })
-        return
+        return result
+      }
+      const successResult: DispatchResult = {
+        success: true,
+        message: data.message || (data.mode === 'demo' ? 'Workflow dispatched in Demo Mode' : 'Workflow dispatched successfully'),
+        run_id: String(data.run_id),
+        deploy_id: String(data.deploy_id),
+        mode: data.mode,
       }
       set((state) => {
         const updatedWorkflows = state.workflows.map((wf) => {
@@ -105,26 +113,23 @@ export const useWorkflowsStore = create<WorkflowsState>((set, get) => ({
         })
         return {
           dispatching: false,
-          lastDispatchResult: {
-            success: true,
-            message: data.message || (data.mode === 'demo' ? 'Workflow dispatched in Demo Mode' : 'Workflow dispatched successfully'),
-            run_id: String(data.run_id),
-            deploy_id: String(data.deploy_id),
-            mode: data.mode,
-          },
+          lastDispatchResult: successResult,
           currentRunId: String(data.run_id),
           currentWorkflowId: workflowId,
           workflows: updatedWorkflows,
         }
       })
+      return successResult
     } catch (e) {
+      const result: DispatchResult = {
+        success: false,
+        message: (e as Error).message,
+      }
       set({
         dispatching: false,
-        lastDispatchResult: {
-          success: false,
-          message: (e as Error).message,
-        },
+        lastDispatchResult: result,
       })
+      return result
     }
   },
   handleRealtimeEvent: (event) => {
