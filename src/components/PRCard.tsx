@@ -21,15 +21,18 @@ const reviewerStateColor: Record<string, string> = {
 
 interface PRCardProps {
   pr: PullRequest
-  flash?: boolean
+  flashNew?: boolean
+  flashUpdate?: boolean
 }
 
-export default function PRCard({ pr, flash }: PRCardProps) {
+export default function PRCard({ pr, flashNew, flashUpdate }: PRCardProps) {
   const navigate = useNavigate()
+
+  const flashClass = flashNew ? 'flash-new' : flashUpdate ? 'flash-update' : ''
 
   return (
     <div
-      className={`card-hover p-4 ${flash ? 'flash-update' : ''}`}
+      className={`card-hover p-4 ${flashClass}`}
       onClick={() => navigate('/pipeline')}
     >
       <div className="flex items-start justify-between gap-3">

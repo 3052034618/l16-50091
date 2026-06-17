@@ -39,43 +39,106 @@ router.get('/', (req: Request, res: Response) => {
     return d.toISOString().split('T')[0]
   }
 
-  const freqMap = new Map<string, { count: number; repo_id: number }>()
-  for (const r of records) {
-    const key = getPeriodKey(r.started_at)
-    const composite = `${key}::${r.repo_id}`
-    if (!freqMap.has(composite)) {
-      freqMap.set(composite, { count: 0, repo_id: r.repo_id })
+  const repoIds = [...new Set(records.map((r) => r.repo_id))]
+
+  const byRepo: Array<{
+    repo_id: number
+    repo_name: string
+    frequency: Array<{ period: string; count: number }>
+    success_rate: Array<{ period: string; total: number; successes: number; rate: number }>
+    overall: {
+      total_deploys: number
+      successful: number
+      failed: number
+      success_rate: number
+      avg_duration_minutes: number
     }
-    freqMap.get(composite)!.count++
+  }> = []
+
+  for (const repoId of repoIds) {
+    const repoRecords = records.filter((r) => r.repo_id === repoId)
+    const repo = db.repos.find((r) => r.id === repoId)
+    const repoName = repo?.full_name || `repo_${repoId}`
+
+    const freqMap = new Map<string, number>()
+    for (const r of repoRecords) {
+      const key = getPeriodKey(r.started_at)
+      freqMap.set(key, (freqMap.get(key) || 0) + 1)
+    }
+
+    const frequency = Array.from(freqMap.entries())
+      .map(([period, count]) => ({ period, count }))
+      .sort((a, b) => a.period.localeCompare(b.period))
+
+    const rateMap = new Map<string, { total: number; successes: number }>()
+    for (const r of repoRecords) {
+      const key = getPeriodKey(r.started_at)
+      if (!rateMap.has(key)) {
+        rateMap.set(key, { total: 0, successes: 0 })
+      }
+      const entry = rateMap.get(key)!
+      entry.total++
+      if (r.status === 'success') entry.successes++
+    }
+
+    const successRate = Array.from(rateMap.entries())
+      .map(([period, val]) => ({
+        period,
+        total: val.total,
+        successes: val.successes,
+        rate: val.total > 0 ? Math.round((100.0 * val.successes / val.total) * 10) / 10 : 0,
+      }))
+      .sort((a, b) => a.period.localeCompare(b.period))
+
+    const totalDeploys = repoRecords.length
+    const successful = repoRecords.filter((r) => r.status === 'success').length
+    const failed = repoRecords.filter((r) => r.status === 'failed').length
+    const successRateOverall = totalDeploys > 0
+      ? Math.round((100.0 * successful / totalDeploys) * 10) / 10
+      : 0
+
+    byRepo.push({
+      repo_id: repoId,
+      repo_name: repoName,
+      frequency,
+      success_rate: successRate,
+      overall: {
+        total_deploys: totalDeploys,
+        successful,
+        failed,
+        success_rate: successRateOverall,
+        avg_duration_minutes: 0,
+      },
+    })
   }
 
-  const frequency = Array.from(freqMap.entries())
-    .map(([key, val]) => ({
-      period: key.split('::')[0],
-      count: val.count,
-      repo_id: val.repo_id,
-    }))
-    .sort((a, b) => a.period.localeCompare(b.period))
-
-  const rateMap = new Map<string, { total: number; successes: number; repo_id: number }>()
+  const aggFreqMap = new Map<string, number>()
   for (const r of records) {
     const key = getPeriodKey(r.started_at)
-    const composite = `${key}::${r.repo_id}`
-    if (!rateMap.has(composite)) {
-      rateMap.set(composite, { total: 0, successes: 0, repo_id: r.repo_id })
+    aggFreqMap.set(key, (aggFreqMap.get(key) || 0) + 1)
+  }
+
+  const frequency = Array.from(aggFreqMap.entries())
+    .map(([period, count]) => ({ period, count }))
+    .sort((a, b) => a.period.localeCompare(b.period))
+
+  const aggRateMap = new Map<string, { total: number; successes: number }>()
+  for (const r of records) {
+    const key = getPeriodKey(r.started_at)
+    if (!aggRateMap.has(key)) {
+      aggRateMap.set(key, { total: 0, successes: 0 })
     }
-    const entry = rateMap.get(composite)!
+    const entry = aggRateMap.get(key)!
     entry.total++
     if (r.status === 'success') entry.successes++
   }
 
-  const successRate = Array.from(rateMap.entries())
-    .map(([key, val]) => ({
-      period: key.split('::')[0],
+  const successRate = Array.from(aggRateMap.entries())
+    .map(([period, val]) => ({
+      period,
       total: val.total,
       successes: val.successes,
       rate: val.total > 0 ? Math.round((100.0 * val.successes / val.total) * 10) / 10 : 0,
-      repo_id: val.repo_id,
     }))
     .sort((a, b) => a.period.localeCompare(b.period))
 
@@ -94,7 +157,7 @@ router.get('/', (req: Request, res: Response) => {
     avg_duration_minutes: 0,
   }
 
-  res.json({ frequency, success_rate: successRate, overall })
+  res.json({ frequency, success_rate: successRate, overall, by_repo: byRepo })
 })
 
 export default router

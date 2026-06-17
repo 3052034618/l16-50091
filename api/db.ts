@@ -54,6 +54,17 @@ export interface PR {
   reviewers: Reviewer[]
 }
 
+export interface PipelineStep {
+  id: number
+  job_id: number
+  number: number
+  name: string
+  status: string
+  conclusion: string | null
+  started_at: string | null
+  completed_at: string | null
+}
+
 export interface PipelineJob {
   id: number
   run_id: number
@@ -179,6 +190,125 @@ const pipelineJobs: PipelineJob[] = [
   { id: 36, run_id: 12, name: 'plan', stage: 'build', status: 'queued', conclusion: null, started_at: null, completed_at: null },
 ]
 
+const stepConfigs: Record<string, string[]> = {
+  lint: ['Set up', 'Checkout', 'Install dependencies', 'Run linter'],
+  build: ['Set up', 'Checkout', 'Install deps', 'Build', 'Upload artifacts'],
+  test: ['Set up', 'Checkout', 'Install deps', 'Unit tests', 'Integration tests', 'Coverage report'],
+  e2e: ['Set up', 'Checkout', 'Install deps', 'Start server', 'E2E tests', 'Teardown'],
+  'deploy-staging': ['Set up', 'Checkout', 'Configure', 'Deploy', 'Verify', 'Cleanup'],
+  'deploy-production': ['Set up', 'Checkout', 'Configure', 'Deploy', 'Verify', 'Cleanup'],
+  apply: ['Set up', 'Checkout', 'Configure', 'Deploy', 'Verify', 'Cleanup'],
+  validate: ['Set up', 'Checkout', 'Validate config'],
+  plan: ['Set up', 'Checkout', 'Init', 'Plan', 'Save plan'],
+}
+
+let stepId = 1
+function generateSteps(job: PipelineJob): PipelineStep[] {
+  const stepNames = stepConfigs[job.name] || ['Set up', 'Run']
+  const steps: PipelineStep[] = []
+  const total = stepNames.length
+
+  if (job.status === 'queued') {
+    for (let i = 0; i < total; i++) {
+      steps.push({
+        id: stepId++,
+        job_id: job.id,
+        number: i + 1,
+        name: stepNames[i],
+        status: 'queued',
+        conclusion: null,
+        started_at: null,
+        completed_at: null,
+      })
+    }
+  } else if (job.status === 'completed' && job.conclusion === 'success') {
+    for (let i = 0; i < total; i++) {
+      steps.push({
+        id: stepId++,
+        job_id: job.id,
+        number: i + 1,
+        name: stepNames[i],
+        status: 'completed',
+        conclusion: 'success',
+        started_at: job.started_at,
+        completed_at: job.completed_at,
+      })
+    }
+  } else if (job.status === 'completed' && job.conclusion === 'failure') {
+    const failIndex = total - 1
+    for (let i = 0; i < total; i++) {
+      if (i < failIndex) {
+        steps.push({
+          id: stepId++,
+          job_id: job.id,
+          number: i + 1,
+          name: stepNames[i],
+          status: 'completed',
+          conclusion: 'success',
+          started_at: job.started_at,
+          completed_at: job.completed_at,
+        })
+      } else {
+        steps.push({
+          id: stepId++,
+          job_id: job.id,
+          number: i + 1,
+          name: stepNames[i],
+          status: 'completed',
+          conclusion: 'failure',
+          started_at: job.started_at,
+          completed_at: job.completed_at,
+        })
+      }
+    }
+  } else if (job.status === 'in_progress') {
+    const runningIndex = Math.floor(total / 2)
+    for (let i = 0; i < total; i++) {
+      if (i < runningIndex) {
+        steps.push({
+          id: stepId++,
+          job_id: job.id,
+          number: i + 1,
+          name: stepNames[i],
+          status: 'completed',
+          conclusion: 'success',
+          started_at: job.started_at,
+          completed_at: job.started_at,
+        })
+      } else if (i === runningIndex) {
+        steps.push({
+          id: stepId++,
+          job_id: job.id,
+          number: i + 1,
+          name: stepNames[i],
+          status: 'in_progress',
+          conclusion: null,
+          started_at: job.started_at,
+          completed_at: null,
+        })
+      } else {
+        steps.push({
+          id: stepId++,
+          job_id: job.id,
+          number: i + 1,
+          name: stepNames[i],
+          status: 'queued',
+          conclusion: null,
+          started_at: null,
+          completed_at: null,
+        })
+      }
+    }
+  }
+
+  return steps
+}
+
+const pipelineSteps: PipelineStep[] = []
+for (const job of pipelineJobs) {
+  pipelineSteps.push(...generateSteps(job))
+}
+
 const pipelineRuns: PipelineRun[] = [
   { id: 1, repo_id: 1, run_number: 1101, event: 'push', branch: 'main', commit_sha: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0', status: 'completed', conclusion: 'success', created_at: daysAgo(6), updated_at: daysAgo(5) },
   { id: 2, repo_id: 1, run_number: 1102, event: 'pull_request', branch: 'feature/dark-mode', commit_sha: 'b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1', status: 'completed', conclusion: 'success', created_at: daysAgo(5), updated_at: daysAgo(4) },
@@ -242,6 +372,7 @@ export const db = {
   pullRequests,
   pipelineRuns,
   pipelineJobs,
+  pipelineSteps,
   coverageRecords,
   deployRecords,
   workflows,

@@ -35,9 +35,49 @@ interface DashboardState {
   pullRequests: Record<string, PullRequest[]>
   loading: boolean
   error: string | null
+  flashAddedPRs: Set<string>
+  flashUpdatedPRs: Set<string>
   fetchRepos: () => Promise<void>
   fetchPullRequests: (repoId: string) => Promise<void>
   handleRealtimeEvent: (event: { type: string; payload: unknown }) => void
+  clearFlashAdded: (prId: string) => void
+  clearFlashUpdated: (prId: string) => void
+}
+
+function mapPayloadToPR(payload: any): PullRequest {
+  const id = String(payload.id ?? payload.pr_id ?? '')
+  const repoId = String(payload.repo_id ?? '')
+  const authorLogin = payload.author_login ?? payload.user?.login ?? ''
+  const authorAvatar = payload.author_avatar_url ?? payload.user?.avatar_url ?? ''
+  const isMerged = payload.status === 'merged' || payload.merged === true
+  const ciStatus = (payload.ci_status || 'pending') as PullRequest['ci_status']
+  const reviewers = (payload.reviewers || []).map((r: any) => ({
+    login: r.login,
+    avatar_url: r.avatar_url,
+    state: r.state as 'APPROVED' | 'CHANGES_REQUESTED' | 'PENDING',
+  }))
+
+  return {
+    id,
+    number: payload.number ?? 0,
+    title: payload.title ?? '',
+    author: {
+      login: authorLogin,
+      avatar_url: authorAvatar,
+    },
+    ci_status: ciStatus,
+    reviewers,
+    mergeable: null,
+    merged: isMerged,
+    created_at: payload.created_at ?? new Date().toISOString(),
+    updated_at: payload.updated_at ?? new Date().toISOString(),
+    repo_id: repoId,
+    html_url: payload.html_url ?? '',
+  }
+}
+
+function sortPRsByUpdatedDesc(prs: PullRequest[]): PullRequest[] {
+  return [...prs].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
 }
 
 export const useDashboardStore = create<DashboardState>((set, get) => ({
@@ -45,6 +85,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   pullRequests: {},
   loading: false,
   error: null,
+  flashAddedPRs: new Set(),
+  flashUpdatedPRs: new Set(),
   fetchRepos: async () => {
     set({ loading: true, error: null })
     try {
@@ -82,25 +124,80 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         html_url: '',
       }))
       set((state) => ({
-        pullRequests: { ...state.pullRequests, [repoId]: prs },
+        pullRequests: { ...state.pullRequests, [repoId]: sortPRsByUpdatedDesc(prs) },
       }))
     } catch (e) {
       set({ error: (e as Error).message })
     }
   },
   handleRealtimeEvent: (event) => {
-    if (event.type === 'pr_updated' || event.type === 'pr_created') {
-      const payload = event.payload as PullRequest
-      const repoId = payload.repo_id
-      const existing = get().pullRequests[repoId] || []
-      const idx = existing.findIndex((pr) => pr.id === payload.id)
-      const updated =
-        idx >= 0
-          ? [...existing.slice(0, idx), payload, ...existing.slice(idx + 1)]
-          : [payload, ...existing]
-      set((state) => ({
-        pullRequests: { ...state.pullRequests, [repoId]: updated },
-      }))
+    const { type, payload } = event
+    const data = payload as any
+
+    const prEvents = [
+      'pull_request_opened',
+      'pull_request_updated',
+      'pull_request_closed',
+      'workflow_run_started',
+      'check_suite_completed',
+      'pr_created',
+      'pr_updated',
+    ]
+
+    if (!prEvents.includes(type)) return
+
+    const pr = mapPayloadToPR(data)
+    const repoId = pr.repo_id
+    if (!repoId || !pr.id) return
+
+    const existing = get().pullRequests[repoId] || []
+    const idx = existing.findIndex((p) => p.id === pr.id)
+    const isNew = idx === -1
+
+    let updatedPRs: PullRequest[]
+
+    if (type === 'pull_request_opened' || type === 'pr_created') {
+      updatedPRs = sortPRsByUpdatedDesc([pr, ...existing])
+    } else if (isNew) {
+      updatedPRs = sortPRsByUpdatedDesc([pr, ...existing])
+    } else {
+      const merged = { ...existing[idx], ...pr }
+      updatedPRs = sortPRsByUpdatedDesc([
+        ...existing.slice(0, idx),
+        merged,
+        ...existing.slice(idx + 1),
+      ])
     }
+
+    set((state) => {
+      const nextFlashAdded = new Set(state.flashAddedPRs)
+      const nextFlashUpdated = new Set(state.flashUpdatedPRs)
+
+      if (type === 'pull_request_opened' || type === 'pr_created' || isNew) {
+        nextFlashAdded.add(pr.id)
+      } else {
+        nextFlashUpdated.add(pr.id)
+      }
+
+      return {
+        pullRequests: { ...state.pullRequests, [repoId]: updatedPRs },
+        flashAddedPRs: nextFlashAdded,
+        flashUpdatedPRs: nextFlashUpdated,
+      }
+    })
+  },
+  clearFlashAdded: (prId: string) => {
+    set((state) => {
+      const next = new Set(state.flashAddedPRs)
+      next.delete(prId)
+      return { flashAddedPRs: next }
+    })
+  },
+  clearFlashUpdated: (prId: string) => {
+    set((state) => {
+      const next = new Set(state.flashUpdatedPRs)
+      next.delete(prId)
+      return { flashUpdatedPRs: next }
+    })
   },
 }))

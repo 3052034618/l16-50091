@@ -36,6 +36,28 @@ function handlePush(payload: any) {
   broadcastEvent('pipeline_run_created', { repo_id: repo.id, run_id: newRun.id, branch })
 }
 
+function buildPRPayload(pr: typeof db.pullRequests[0]) {
+  return {
+    id: pr.id,
+    repo_id: pr.repo_id,
+    number: pr.number,
+    title: pr.title,
+    author_login: pr.author_login,
+    author_avatar_url: pr.author_avatar_url,
+    status: pr.status,
+    ci_status: pr.ci_status,
+    head_branch: pr.head_branch,
+    base_branch: pr.base_branch,
+    created_at: pr.created_at,
+    updated_at: pr.updated_at,
+    reviewers: pr.reviewers.map((r) => ({
+      login: r.login,
+      avatar_url: r.avatar_url,
+      state: r.state,
+    })),
+  }
+}
+
 function handlePullRequest(payload: any) {
   const repoFullName = payload.repository?.full_name
   const action = payload.action
@@ -56,7 +78,7 @@ function handlePullRequest(payload: any) {
       existing.author_avatar_url = pr.user?.avatar_url
       existing.ci_status = 'pending'
       existing.updated_at = now
-      broadcastEvent('pull_request_updated', { repo_id: repo.id, pr_id: existing.id, action })
+      broadcastEvent('pull_request_updated', buildPRPayload(existing))
     } else {
       const newPR: typeof db.pullRequests[0] = {
         id: db.genId(),
@@ -74,7 +96,7 @@ function handlePullRequest(payload: any) {
         reviewers: [],
       }
       db.pullRequests.push(newPR)
-      broadcastEvent('pull_request_opened', { repo_id: repo.id, pr_id: newPR.id })
+      broadcastEvent('pull_request_opened', buildPRPayload(newPR))
     }
   } else if (action === 'closed') {
     const merged = pr.merged === true
@@ -83,9 +105,24 @@ function handlePullRequest(payload: any) {
       existing.status = merged ? 'merged' : 'closed'
       existing.ci_status = merged ? 'success' : 'pending'
       existing.updated_at = now
-      broadcastEvent('pull_request_closed', { repo_id: repo.id, number: pr.number, merged })
+      broadcastEvent('pull_request_closed', buildPRPayload(existing))
     }
   }
+}
+
+function findPRForBranch(repoId: number, branch: string) {
+  return db.pullRequests.find((p) => p.repo_id === repoId && p.head_branch === branch && p.status === 'open')
+}
+
+function updatePRCiStatus(repoId: number, branch: string, ciStatus: string) {
+  const pr = findPRForBranch(repoId, branch)
+  if (pr) {
+    const now = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+    pr.ci_status = ciStatus
+    pr.updated_at = now
+    return pr
+  }
+  return null
 }
 
 function handleWorkflowRun(payload: any) {
@@ -98,6 +135,7 @@ function handleWorkflowRun(payload: any) {
   if (!repo) return
 
   const now = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+  const branch = workflowRun.head_branch
 
   if (action === 'queued') {
     const maxRun = db.pipelineRuns
@@ -125,6 +163,11 @@ function handleWorkflowRun(payload: any) {
     )
 
     broadcastEvent('pipeline_run_created', { repo_id: repo.id, run_id: newRun.id })
+
+    const pr = updatePRCiStatus(repo.id, branch, 'running')
+    if (pr) {
+      broadcastEvent('workflow_run_started', buildPRPayload(pr))
+    }
   } else if (action === 'in_progress') {
     const run = db.pipelineRuns
       .filter((r) => r.repo_id === repo.id && r.commit_sha === workflowRun.head_sha)
@@ -138,6 +181,11 @@ function handleWorkflowRun(payload: any) {
         buildJob.started_at = now
       }
       broadcastEvent('pipeline_run_updated', { repo_id: repo.id, run_id: run.id, status: 'in_progress' })
+
+      const pr = updatePRCiStatus(repo.id, branch, 'running')
+      if (pr) {
+        broadcastEvent('pull_request_updated', buildPRPayload(pr))
+      }
     }
   } else if (action === 'completed') {
     const run = db.pipelineRuns
@@ -154,6 +202,12 @@ function handleWorkflowRun(payload: any) {
         job.completed_at = now
       }
       broadcastEvent('pipeline_run_completed', { repo_id: repo.id, run_id: run.id, conclusion })
+
+      const ciStatus = conclusion === 'success' ? 'success' : 'failure'
+      const pr = updatePRCiStatus(repo.id, branch, ciStatus)
+      if (pr) {
+        broadcastEvent('pull_request_updated', buildPRPayload(pr))
+      }
     }
   }
 }
@@ -170,6 +224,7 @@ function handleCheckSuite(payload: any) {
   if (action === 'completed') {
     const conclusion = checkSuite.conclusion || 'success'
     const headSha = checkSuite.head_sha
+    const branch = checkSuite.head_branch || ''
 
     const run = db.pipelineRuns
       .filter((r) => r.repo_id === repo.id && r.commit_sha === headSha)
@@ -180,6 +235,12 @@ function handleCheckSuite(payload: any) {
       run.conclusion = conclusion
       run.updated_at = now
       broadcastEvent('check_suite_completed', { repo_id: repo.id, run_id: run.id, conclusion })
+    }
+
+    const ciStatus = conclusion === 'success' ? 'success' : 'failure'
+    const pr = updatePRCiStatus(repo.id, branch, ciStatus)
+    if (pr) {
+      broadcastEvent('check_suite_completed', buildPRPayload(pr))
     }
   }
 }

@@ -33,7 +33,7 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
     ws.onmessage = (event) => {
       try {
         const parsed = JSON.parse(event.data)
-        set({ lastEvent: { type: parsed.type, payload: parsed.payload, timestamp: Date.now() } })
+        set({ lastEvent: { type: parsed.type, payload: parsed.data, timestamp: Date.now() } })
       } catch {
         set({ lastEvent: { type: 'raw', payload: event.data, timestamp: Date.now() } })
       }

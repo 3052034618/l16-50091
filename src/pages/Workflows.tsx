@@ -1,17 +1,25 @@
-import { useEffect, useState } from 'react'
-import { Play, X, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Play, X, CheckCircle2, AlertCircle, Loader2, ExternalLink } from 'lucide-react'
 import { useWorkflowsStore } from '@/stores/workflows'
 import { useDashboardStore } from '@/stores/dashboard'
+import { useWebSocket } from '@/hooks/useWebSocket'
 import StatusBadge from '@/components/StatusBadge'
 
 export default function Workflows() {
+  const navigate = useNavigate()
   const repos = useDashboardStore((s) => s.repos)
   const fetchRepos = useDashboardStore((s) => s.fetchRepos)
   const workflows = useWorkflowsStore((s) => s.workflows)
   const dispatching = useWorkflowsStore((s) => s.dispatching)
   const lastDispatchResult = useWorkflowsStore((s) => s.lastDispatchResult)
+  const currentRunId = useWorkflowsStore((s) => s.currentRunId)
+  const currentWorkflowId = useWorkflowsStore((s) => s.currentWorkflowId)
   const fetchWorkflows = useWorkflowsStore((s) => s.fetchWorkflows)
   const dispatchWorkflow = useWorkflowsStore((s) => s.dispatchWorkflow)
+  const handleRealtimeEvent = useWorkflowsStore((s) => s.handleRealtimeEvent)
+  const { lastEvent } = useWebSocket()
+  const prevEventRef = useRef<number>(0)
 
   const [selectedRepoId, setSelectedRepoId] = useState<string>('')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -32,6 +40,13 @@ export default function Workflows() {
   useEffect(() => {
     if (selectedRepoId) fetchWorkflows(selectedRepoId)
   }, [selectedRepoId, fetchWorkflows])
+
+  useEffect(() => {
+    if (lastEvent && lastEvent.timestamp !== prevEventRef.current) {
+      prevEventRef.current = lastEvent.timestamp
+      handleRealtimeEvent(lastEvent)
+    }
+  }, [lastEvent, handleRealtimeEvent])
 
   const openDialog = (workflowId: string) => {
     setDialogWorkflow(workflowId)
@@ -110,6 +125,17 @@ export default function Workflows() {
                     {new Date(wf.last_run_at).toLocaleDateString()}
                   </span>
                 )}
+                {currentRunId && currentWorkflowId === wf.id && (
+                  <button
+                    onClick={() => navigate(`/pipeline?repo=${selectedRepoId}`)}
+                    className="text-xs text-[var(--accent)] hover:underline flex items-center gap-1 ml-auto"
+                  >
+                    <ExternalLink size={12} />
+                    View Run
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center mt-2">
                 <span
                   className={`text-xs ${
                     wf.state === 'active' ? 'text-[var(--success)]' : 'text-[var(--text-secondary)]'

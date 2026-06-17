@@ -9,18 +9,41 @@ export interface Workflow {
   last_run_at: string | null
 }
 
+interface DispatchResult {
+  success: boolean
+  message: string
+  run_id?: string
+  deploy_id?: string
+}
+
 interface WorkflowsState {
   workflows: Workflow[]
   dispatching: boolean
-  lastDispatchResult: { success: boolean; message: string } | null
+  lastDispatchResult: DispatchResult | null
+  currentRunId: string | null
+  currentWorkflowId: string | null
   fetchWorkflows: (repoId: string) => Promise<void>
   dispatchWorkflow: (repoId: string, workflowId: string, ref: string, inputs?: Record<string, string>) => Promise<void>
+  handleRealtimeEvent: (event: { type: string; payload: any }) => void
+  clearCurrentRun: () => void
 }
 
-export const useWorkflowsStore = create<WorkflowsState>((set) => ({
+const mapStatusToRunStatus = (status: string, conclusion: string | null): 'success' | 'failure' | 'running' | 'pending' | 'queued' | null => {
+  if (status === 'queued') return 'queued'
+  if (status === 'in_progress') return 'running'
+  if (status === 'completed') {
+    return conclusion === 'success' ? 'success' : 'failure'
+  }
+  if (status === 'pending') return 'pending'
+  return null
+}
+
+export const useWorkflowsStore = create<WorkflowsState>((set, get) => ({
   workflows: [],
   dispatching: false,
   lastDispatchResult: null,
+  currentRunId: null,
+  currentWorkflowId: null,
   fetchWorkflows: async (repoId: string) => {
     try {
       const res = await fetch(`/api/workflows/${repoId}`)
@@ -47,10 +70,77 @@ export const useWorkflowsStore = create<WorkflowsState>((set) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref, inputs }),
       })
-      if (!res.ok) throw new Error('Dispatch failed')
-      set({ dispatching: false, lastDispatchResult: { success: true, message: 'Workflow dispatched successfully' } })
+      if (!res.ok) {
+        let errorData: any
+        try {
+          errorData = await res.json()
+        } catch {
+          errorData = { error: 'Dispatch failed' }
+        }
+        throw new Error(errorData.error || 'Dispatch failed')
+      }
+      const data = await res.json()
+      set((state) => {
+        const updatedWorkflows = state.workflows.map((wf) => {
+          if (wf.id === workflowId) {
+            return {
+              ...wf,
+              last_run_status: 'queued' as const,
+              last_run_at: new Date().toISOString(),
+            }
+          }
+          return wf
+        })
+        return {
+          dispatching: false,
+          lastDispatchResult: {
+            success: true,
+            message: 'Workflow dispatched successfully',
+            run_id: String(data.run_id),
+            deploy_id: String(data.deploy_id),
+          },
+          currentRunId: String(data.run_id),
+          currentWorkflowId: workflowId,
+          workflows: updatedWorkflows,
+        }
+      })
     } catch (e) {
-      set({ dispatching: false, lastDispatchResult: { success: false, message: (e as Error).message } })
+      set({
+        dispatching: false,
+        lastDispatchResult: {
+          success: false,
+          message: (e as Error).message,
+        },
+      })
     }
+  },
+  handleRealtimeEvent: (event) => {
+    const { currentRunId, currentWorkflowId } = get()
+    if (!currentRunId || !currentWorkflowId) return
+
+    const eventTypes = ['pipeline_run_created', 'pipeline_run_updated', 'pipeline_run_completed']
+    if (!eventTypes.includes(event.type)) return
+
+    const payload = event.payload
+    if (String(payload.id) !== currentRunId) return
+
+    const runStatus = mapStatusToRunStatus(payload.status, payload.conclusion)
+    if (runStatus) {
+      set((state) => ({
+        workflows: state.workflows.map((wf) => {
+          if (wf.id === currentWorkflowId) {
+            return {
+              ...wf,
+              last_run_status: runStatus,
+              last_run_at: payload.updated_at || wf.last_run_at,
+            }
+          }
+          return wf
+        }),
+      }))
+    }
+  },
+  clearCurrentRun: () => {
+    set({ currentRunId: null, currentWorkflowId: null })
   },
 }))

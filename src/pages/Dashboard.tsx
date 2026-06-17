@@ -8,14 +8,17 @@ export default function Dashboard() {
   const repos = useDashboardStore((s) => s.repos)
   const pullRequests = useDashboardStore((s) => s.pullRequests)
   const loading = useDashboardStore((s) => s.loading)
+  const flashAddedPRs = useDashboardStore((s) => s.flashAddedPRs)
+  const flashUpdatedPRs = useDashboardStore((s) => s.flashUpdatedPRs)
   const fetchRepos = useDashboardStore((s) => s.fetchRepos)
   const fetchPullRequests = useDashboardStore((s) => s.fetchPullRequests)
   const handleRealtimeEvent = useDashboardStore((s) => s.handleRealtimeEvent)
+  const clearFlashAdded = useDashboardStore((s) => s.clearFlashAdded)
+  const clearFlashUpdated = useDashboardStore((s) => s.clearFlashUpdated)
   const { lastEvent } = useWebSocket()
 
   const [selectedRepos, setSelectedRepos] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
-  const [flashIds, setFlashIds] = useState<Set<string>>(new Set())
   const prevEventRef = useRef<number>(0)
 
   useEffect(() => {
@@ -34,19 +37,24 @@ export default function Dashboard() {
     if (lastEvent && lastEvent.timestamp !== prevEventRef.current) {
       prevEventRef.current = lastEvent.timestamp
       handleRealtimeEvent(lastEvent)
-      if (lastEvent.payload && typeof lastEvent.payload === 'object' && 'id' in (lastEvent.payload as any)) {
-        const prId = (lastEvent.payload as any).id as string
-        setFlashIds((prev) => new Set(prev).add(prId))
-        setTimeout(() => {
-          setFlashIds((prev) => {
-            const next = new Set(prev)
-            next.delete(prId)
-            return next
-          })
-        }, 700)
-      }
     }
   }, [lastEvent, handleRealtimeEvent])
+
+  useEffect(() => {
+    flashAddedPRs.forEach((prId) => {
+      setTimeout(() => {
+        clearFlashAdded(prId)
+      }, 1500)
+    })
+  }, [flashAddedPRs, clearFlashAdded])
+
+  useEffect(() => {
+    flashUpdatedPRs.forEach((prId) => {
+      setTimeout(() => {
+        clearFlashUpdated(prId)
+      }, 700)
+    })
+  }, [flashUpdatedPRs, clearFlashUpdated])
 
   const toggleRepo = (repoId: string) => {
     setSelectedRepos((prev) => {
@@ -161,7 +169,12 @@ export default function Dashboard() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 {prs.map((pr) => (
-                  <PRCard key={pr.id} pr={pr} flash={flashIds.has(pr.id)} />
+                  <PRCard
+                    key={pr.id}
+                    pr={pr}
+                    flashNew={flashAddedPRs.has(pr.id)}
+                    flashUpdate={flashUpdatedPRs.has(pr.id)}
+                  />
                 ))}
               </div>
             </div>

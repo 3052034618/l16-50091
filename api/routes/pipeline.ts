@@ -15,7 +15,22 @@ router.get('/:repoId/runs', (req: Request, res: Response) => {
         .sort((a, b) => {
           const stageOrder: Record<string, number> = { build: 0, test: 1, deploy: 2 }
           return (stageOrder[a.stage] ?? 3) - (stageOrder[b.stage] ?? 3)
-        }),
+        })
+        .map((job) => ({
+          ...job,
+          steps: db.pipelineSteps
+            .filter((s) => s.job_id === job.id)
+            .map((step) => ({
+              id: step.id,
+              number: step.number,
+              name: step.name,
+              status: step.status,
+              conclusion: step.conclusion,
+              started_at: step.started_at,
+              completed_at: step.completed_at,
+            }))
+            .sort((a, b) => a.number - b.number),
+        })),
     }))
   res.json(runs)
 })

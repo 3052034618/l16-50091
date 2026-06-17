@@ -17,8 +17,8 @@ export function setupWebSocket(server: Server) {
   })
 }
 
-export function broadcastEvent(type: string, data: any) {
-  const message = JSON.stringify({ type, data, timestamp: new Date().toISOString() })
+export function broadcastEvent(type: string, payload: any) {
+  const message = JSON.stringify({ type, payload, timestamp: new Date().toISOString() })
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message)

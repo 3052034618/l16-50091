@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, GitBranch } from 'lucide-react'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useDashboardStore } from '@/stores/dashboard'
+import { useWebSocket } from '@/hooks/useWebSocket'
 import PipelineStageColumn from '@/components/PipelineStageColumn'
 import StatusBadge from '@/components/StatusBadge'
 
@@ -18,9 +19,14 @@ export default function Pipeline() {
   const loading = usePipelineStore((s) => s.loading)
   const fetchRuns = usePipelineStore((s) => s.fetchRuns)
   const selectRun = usePipelineStore((s) => s.selectRun)
+  const updateRunFromEvent = usePipelineStore((s) => s.updateRunFromEvent)
+  const { lastEvent } = useWebSocket()
 
   const [selectedRepoId, setSelectedRepoId] = useState<string>('')
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null)
+  const [flashSelected, setFlashSelected] = useState<boolean>(false)
+  const flashTimeoutRef = useRef<number | null>(null)
+  const prevEventRef = useRef<number>(0)
 
   useEffect(() => {
     if (repos.length === 0) fetchRepos()
@@ -44,6 +50,30 @@ export default function Pipeline() {
       selectRun(runs[0].id)
     }
   }, [runs, selectedRun, selectRun])
+
+  useEffect(() => {
+    if (!lastEvent || lastEvent.timestamp === prevEventRef.current) return
+    prevEventRef.current = lastEvent.timestamp
+
+    const eventTypes = ['pipeline_run_created', 'pipeline_run_updated', 'pipeline_run_completed']
+    if (!eventTypes.includes(lastEvent.type)) return
+
+    const runData = lastEvent.payload as any
+    if (!runData || !runData.id) return
+
+    const isSelected = selectedRun?.id === String(runData.id)
+    updateRunFromEvent(runData)
+
+    if (isSelected) {
+      if (flashTimeoutRef.current) {
+        window.clearTimeout(flashTimeoutRef.current)
+      }
+      setFlashSelected(true)
+      flashTimeoutRef.current = window.setTimeout(() => {
+        setFlashSelected(false)
+      }, 800)
+    }
+  }, [lastEvent, selectedRun, updateRunFromEvent])
 
   const buildJobs = (selectedRun?.jobs || []).filter((j) => j.stage === 'build')
   const testJobs = (selectedRun?.jobs || []).filter((j) => j.stage === 'test')
@@ -122,7 +152,7 @@ export default function Pipeline() {
         </div>
       ) : selectedRun ? (
         <>
-          <div className="card p-4 mb-6">
+          <div className={`card p-4 mb-6 transition-all duration-300 ${flashSelected ? 'ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--bg-primary)]' : ''}`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <p className="text-sm font-medium text-[var(--text-primary)]">
