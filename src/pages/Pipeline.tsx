@@ -9,8 +9,9 @@ import StatusBadge from '@/components/StatusBadge'
 
 export default function Pipeline() {
   const navigate = useNavigate()
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const repoIdParam = params.get('repo')
+  const runIdParam = params.get('run')
 
   const repos = useDashboardStore((s) => s.repos)
   const fetchRepos = useDashboardStore((s) => s.fetchRepos)
@@ -46,10 +47,28 @@ export default function Pipeline() {
   }, [selectedRepoId, fetchRuns])
 
   useEffect(() => {
-    if (runs.length > 0 && !selectedRun) {
+    if (runs.length === 0) return
+    if (runIdParam) {
+      const targetRun = runs.find((r) => r.id === runIdParam || String(r.run_number) === runIdParam)
+      if (targetRun && (!selectedRun || selectedRun.id !== targetRun.id)) {
+        selectRun(targetRun.id)
+      } else if (!targetRun && !selectedRun) {
+        selectRun(runs[0].id)
+      }
+    } else if (!selectedRun) {
       selectRun(runs[0].id)
     }
-  }, [runs, selectedRun, selectRun])
+  }, [runs, selectedRun, selectRun, runIdParam])
+
+  const handleSelectRun = (runId: string) => {
+    selectRun(runId)
+    const nextParams = new URLSearchParams(params)
+    nextParams.set('run', runId)
+    if (selectedRepoId) {
+      nextParams.set('repo', selectedRepoId)
+    }
+    setParams(nextParams, { replace: true })
+  }
 
   useEffect(() => {
     if (!lastEvent || lastEvent.timestamp === prevEventRef.current) return
@@ -95,8 +114,12 @@ export default function Pipeline() {
         <select
           value={selectedRepoId}
           onChange={(e) => {
-            setSelectedRepoId(e.target.value)
-            selectRun(runs[0]?.id || '')
+            const newRepoId = e.target.value
+            setSelectedRepoId(newRepoId)
+            const nextParams = new URLSearchParams(params)
+            nextParams.set('repo', newRepoId)
+            nextParams.delete('run')
+            setParams(nextParams, { replace: true })
           }}
           className="px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
         >
@@ -126,7 +149,7 @@ export default function Pipeline() {
           {runs.map((run) => (
             <button
               key={run.id}
-              onClick={() => selectRun(run.id)}
+              onClick={() => handleSelectRun(run.id)}
               className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                 selectedRun?.id === run.id
                   ? 'bg-[var(--accent)] text-white'

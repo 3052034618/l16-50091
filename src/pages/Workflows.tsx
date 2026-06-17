@@ -127,7 +127,7 @@ export default function Workflows() {
                 )}
                 {currentRunId && currentWorkflowId === wf.id && (
                   <button
-                    onClick={() => navigate(`/pipeline?repo=${selectedRepoId}`)}
+                    onClick={() => navigate(`/pipeline?repo=${selectedRepoId}&run=${currentRunId}`)}
                     className="text-xs text-[var(--accent)] hover:underline flex items-center gap-1 ml-auto"
                   >
                     <ExternalLink size={12} />

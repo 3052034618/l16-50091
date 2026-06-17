@@ -4,6 +4,33 @@ import { broadcastEvent } from '../websocket.js'
 
 const router = Router()
 
+function buildRunPayload(runId: number) {
+  const run = db.pipelineRuns.find((r) => r.id === runId)
+  if (!run) return null
+  const jobs = db.pipelineJobs
+    .filter((j) => j.run_id === runId)
+    .sort((a, b) => {
+      const stageOrder: Record<string, number> = { build: 0, test: 1, deploy: 2 }
+      return (stageOrder[a.stage] ?? 3) - (stageOrder[b.stage] ?? 3)
+    })
+    .map((job) => ({
+      ...job,
+      steps: db.pipelineSteps
+        .filter((s) => s.job_id === job.id)
+        .map((step) => ({
+          id: step.id,
+          number: step.number,
+          name: step.name,
+          status: step.status,
+          conclusion: step.conclusion,
+          started_at: step.started_at,
+          completed_at: step.completed_at,
+        }))
+        .sort((a, b) => a.number - b.number),
+    }))
+  return { ...run, jobs }
+}
+
 function handlePush(payload: any) {
   const repoFullName = payload.repository?.full_name
   if (!repoFullName) return
@@ -33,7 +60,8 @@ function handlePush(payload: any) {
   }
   db.pipelineRuns.push(newRun)
 
-  broadcastEvent('pipeline_run_created', { repo_id: repo.id, run_id: newRun.id, branch })
+  const runPayload = buildRunPayload(newRun.id)
+  broadcastEvent('pipeline_run_created', runPayload || { repo_id: repo.id, run_id: newRun.id, branch })
 }
 
 function buildPRPayload(pr: typeof db.pullRequests[0]) {
@@ -157,12 +185,28 @@ function handleWorkflowRun(payload: any) {
     }
     db.pipelineRuns.push(newRun)
 
+    const buildJobId = db.genId()
+    const testJobId = db.genId()
     db.pipelineJobs.push(
-      { id: db.genId(), run_id: newRun.id, name: 'build', stage: 'build', status: 'queued', conclusion: null, started_at: null, completed_at: null },
-      { id: db.genId(), run_id: newRun.id, name: 'test', stage: 'test', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: buildJobId, run_id: newRun.id, name: 'build', stage: 'build', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: testJobId, run_id: newRun.id, name: 'test', stage: 'test', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+    )
+    db.pipelineSteps.push(
+      { id: db.genId(), job_id: buildJobId, number: 1, name: 'Set up job', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: buildJobId, number: 2, name: 'Checkout', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: buildJobId, number: 3, name: 'Install dependencies', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: buildJobId, number: 4, name: 'Build', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: buildJobId, number: 5, name: 'Upload artifacts', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: testJobId, number: 1, name: 'Set up job', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: testJobId, number: 2, name: 'Checkout', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: testJobId, number: 3, name: 'Install dependencies', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: testJobId, number: 4, name: 'Unit tests', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: testJobId, number: 5, name: 'Integration tests', status: 'queued', conclusion: null, started_at: null, completed_at: null },
+      { id: db.genId(), job_id: testJobId, number: 6, name: 'Coverage report', status: 'queued', conclusion: null, started_at: null, completed_at: null },
     )
 
-    broadcastEvent('pipeline_run_created', { repo_id: repo.id, run_id: newRun.id })
+    const runPayload = buildRunPayload(newRun.id)
+    broadcastEvent('pipeline_run_created', runPayload || { repo_id: repo.id, run_id: newRun.id })
 
     const pr = updatePRCiStatus(repo.id, branch, 'running')
     if (pr) {
@@ -179,8 +223,20 @@ function handleWorkflowRun(payload: any) {
       if (buildJob) {
         buildJob.status = 'in_progress'
         buildJob.started_at = now
+        const buildSteps = db.pipelineSteps.filter((s) => s.job_id === buildJob.id).sort((a, b) => a.number - b.number)
+        if (buildSteps.length >= 3) {
+          for (let i = 0; i < 2; i++) {
+            buildSteps[i].status = 'completed'
+            buildSteps[i].conclusion = 'success'
+            buildSteps[i].started_at = now
+            buildSteps[i].completed_at = now
+          }
+          buildSteps[2].status = 'in_progress'
+          buildSteps[2].started_at = now
+        }
       }
-      broadcastEvent('pipeline_run_updated', { repo_id: repo.id, run_id: run.id, status: 'in_progress' })
+      const runPayload = buildRunPayload(run.id)
+      broadcastEvent('pipeline_run_updated', runPayload || { repo_id: repo.id, run_id: run.id, status: 'in_progress' })
 
       const pr = updatePRCiStatus(repo.id, branch, 'running')
       if (pr) {
@@ -200,8 +256,16 @@ function handleWorkflowRun(payload: any) {
         job.status = 'completed'
         job.conclusion = conclusion
         job.completed_at = now
+        if (!job.started_at) job.started_at = now
+        for (const step of db.pipelineSteps.filter((s) => s.job_id === job.id)) {
+          step.status = 'completed'
+          step.conclusion = conclusion
+          if (!step.started_at) step.started_at = now
+          if (!step.completed_at) step.completed_at = now
+        }
       }
-      broadcastEvent('pipeline_run_completed', { repo_id: repo.id, run_id: run.id, conclusion })
+      const runPayload = buildRunPayload(run.id)
+      broadcastEvent('pipeline_run_completed', runPayload || { repo_id: repo.id, run_id: run.id, conclusion })
 
       const ciStatus = conclusion === 'success' ? 'success' : 'failure'
       const pr = updatePRCiStatus(repo.id, branch, ciStatus)

@@ -130,17 +130,52 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     set({ selectedRun: run })
   },
   updateRunFromEvent: (eventData: any) => {
+    if (!eventData || eventData.id === undefined) return
     const normalized = normalizeRun(eventData)
     const existingIndex = get().runs.findIndex((r) => r.id === normalized.id)
     let newRuns: PipelineRun[]
     if (existingIndex >= 0) {
+      const existing = get().runs[existingIndex]
+      const merged: PipelineRun = {
+        ...existing,
+        ...normalized,
+        jobs: normalized.jobs && normalized.jobs.length > 0
+          ? normalized.jobs.map((newJob) => {
+            const oldJob = existing.jobs.find((j) => j.id === newJob.id || j.name === newJob.name)
+            if (!oldJob) return newJob
+            return {
+              ...oldJob,
+              ...newJob,
+              steps: newJob.steps && newJob.steps.length > 0 ? newJob.steps : oldJob.steps,
+            }
+          })
+          : existing.jobs,
+      }
       newRuns = [...get().runs]
-      newRuns[existingIndex] = normalized
+      newRuns[existingIndex] = merged
     } else {
       newRuns = [normalized, ...get().runs]
     }
     const selectedRun = get().selectedRun
-    const newSelectedRun = selectedRun && selectedRun.id === normalized.id ? normalized : selectedRun
+    let newSelectedRun = selectedRun
+    if (selectedRun && selectedRun.id === normalized.id) {
+      const existingSel = selectedRun
+      newSelectedRun = {
+        ...existingSel,
+        ...normalized,
+        jobs: normalized.jobs && normalized.jobs.length > 0
+          ? normalized.jobs.map((newJob) => {
+            const oldJob = existingSel.jobs.find((j) => j.id === newJob.id || j.name === newJob.name)
+            if (!oldJob) return newJob
+            return {
+              ...oldJob,
+              ...newJob,
+              steps: newJob.steps && newJob.steps.length > 0 ? newJob.steps : oldJob.steps,
+            }
+          })
+          : existingSel.jobs,
+      }
+    }
     set({ runs: newRuns, selectedRun: newSelectedRun })
   },
 }))
